@@ -16,7 +16,7 @@
     "build": "npm run build:client && npm run build:server",
     "build:client": "vite build",
     "build:server": "tsc -p tsconfig.server.json",
-    "start": "node dist/server/index.js",
+    "start": "node dist/server/server/index.js",
     "start:background": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-background.ps1",
     "stop:background": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/stop-background.ps1"
   },
