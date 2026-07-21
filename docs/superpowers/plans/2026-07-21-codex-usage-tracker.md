@@ -6,7 +6,7 @@
 
 **Architecture:** A TypeScript Node service incrementally follows Codex JSONL session events into SQLite and exposes read-only range APIs. A React/Vite client polls those APIs every two seconds and renders health, exact totals, quota movement, charts, and per-model accounting.
 
-**Tech Stack:** Node.js 26, TypeScript, Fastify, better-sqlite3, chokidar, React, Vite, Recharts, Vitest, Testing Library
+**Tech Stack:** Node.js 26, TypeScript, Fastify, built-in `node:sqlite`, chokidar, React, Vite, Recharts, Vitest, Testing Library
 
 ## Global Constraints
 

@@ -26,7 +26,7 @@ GPT-5.6 Sol, Terra, and Luna share the standard pool view. `gpt-5.3-codex-spark`
 
 The project is a TypeScript application with three focused areas:
 
-1. A Node.js collector incrementally follows `%USERPROFILE%\.codex\sessions\**\*.jsonl`, parses only metadata, turn context, and token-count events, and persists normalized records in SQLite.
+1. A Node.js collector incrementally follows `%USERPROFILE%\.codex\sessions\**\*.jsonl`, parses only metadata, turn context, and token-count events, and persists normalized records with Node's built-in SQLite module.
 2. An HTTP API queries exact ranges, calculates reset-safe quota movement, and returns summaries and time-series buckets.
 3. A React web interface polls the local API every two seconds and displays the current status and selected range.
 
