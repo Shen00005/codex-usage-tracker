@@ -1,0 +1,9 @@
+node_modules/
+dist/
+coverage/
+*.log
+.tracker-data/
+.tracker.pid
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
