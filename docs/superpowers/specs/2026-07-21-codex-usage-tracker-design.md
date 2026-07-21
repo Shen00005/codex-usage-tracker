@@ -77,7 +77,7 @@ Invalid ranges return HTTP 400 with a direct message. Database and collector fai
 
 ## Web interface
 
-The visual direction is a compact operations console: deep graphite background, cool gray panels, electric-lime live indicators, and warm amber reset markers. The interface avoids generic oversized cards and uses tabular numerals throughout.
+The visual direction is a compact Windows-native measurement console: smoked indigo surfaces, phosphor cyan telemetry, tungsten amber reset markers, Bahnschrift headings, and Cascadia Mono data. The signature element is a horizontal quota ruler with a precise remaining-position needle. The interface avoids generic oversized cards and uses tabular numerals throughout.
 
 The header shows collector health, last event time, processing lag, and the next reset. The range bar provides exact start/end inputs and presets. Four primary readouts show API-equivalent cost, total tokens, weekly remaining percentage, and percentage points consumed.
 
