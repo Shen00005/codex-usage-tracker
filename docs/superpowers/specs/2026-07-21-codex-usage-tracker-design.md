@@ -14,7 +14,7 @@ Build a private Windows application that runs a local background collector and s
 - Every source event is deduplicated by normalized source path and byte offset.
 - Token categories remain separate: total input, cached input, cache-write input, uncached input, output, and reasoning output. Cached and cache-write input are subsets of input; reasoning output is a subset of output.
 - Event cost is stored as integer nano-dollars to avoid floating-point drift.
-- The weekly quota percentage is reported only to the precision provided by Codex. The application does not invent hidden decimal places.
+- The weekly quota percentage is reported only to the precision provided by Codex. The application does not invent hidden decimal places. The primary weekly meter uses the `codex` limit ID; separately named limit IDs are never merged into it.
 
 ## Scope
 
@@ -64,7 +64,7 @@ For a request with more than 272,000 input tokens, the full request uses twice t
 
 The API accepts inclusive `from` and exclusive `to` UTC timestamps. Presets calculate the exact previous hour, six hours, 24 hours, seven days, or 30 days at selection time. Custom local date-time input is converted to UTC by the browser.
 
-Token and cost totals include events whose timestamps fall inside the range. Percentage points consumed are calculated independently inside each reset window. For each window, the aggregator uses the maximum observed `used_percent` up to each point so stale parallel observations cannot make usage move backward. Movement across a new `resets_at` value is segmented as a reset rather than subtracted across windows.
+Token and cost totals include events whose timestamps fall inside the range. Percentage points consumed are calculated independently inside each reset window. For each window, the aggregator uses the maximum observed `used_percent` up to each point so stale parallel observations cannot make usage move backward. Movement across a new `resets_at` value is segmented as a reset rather than subtracted across windows. Reset timestamps within five minutes are treated as server jitter inside one window; genuine weekly changes remain separate.
 
 ## HTTP interface
 

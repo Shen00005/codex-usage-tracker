@@ -2,6 +2,7 @@ import type { QuotaSnapshot, UsageEvent, UsagePool } from "../shared/domain.js";
 import type { UsageDatabase } from "./database.js";
 
 export type PoolFilter = UsagePool | "all";
+const RESET_JITTER_TOLERANCE_MS = 5 * 60 * 1_000;
 
 export interface UsageTotals {
   inputTokens: number;
@@ -64,14 +65,18 @@ function summarizeQuota(snapshots: QuotaSnapshot[], from: number) {
     };
   }
 
-  const groups = new Map<number, QuotaSnapshot[]>();
-  for (const snapshot of snapshots) {
-    const group = groups.get(snapshot.resetsAt) ?? [];
-    group.push(snapshot);
-    groups.set(snapshot.resetsAt, group);
+  const groups: QuotaSnapshot[][] = [];
+  for (const snapshot of [...snapshots].sort((a, b) => a.occurredAt - b.occurredAt)) {
+    const current = groups.at(-1);
+    const previousReset = current?.at(-1)?.resetsAt;
+    if (previousReset === undefined || Math.abs(snapshot.resetsAt - previousReset) > RESET_JITTER_TOLERANCE_MS) {
+      groups.push([snapshot]);
+    } else {
+      current!.push(snapshot);
+    }
   }
 
-  const activeGroups = [...groups.values()]
+  const activeGroups = groups
     .filter((group) => group.some((snapshot) => snapshot.occurredAt >= from))
     .sort((a, b) => a[0].occurredAt - b[0].occurredAt);
 
@@ -88,7 +93,7 @@ function summarizeQuota(snapshots: QuotaSnapshot[], from: number) {
   }
 
   let consumed = 0;
-  const normalized: Array<{ first: QuotaSnapshot; lastUsed: number }> = [];
+  const normalized: Array<{ first: QuotaSnapshot; lastUsed: number; resetsAt: number }> = [];
   for (const group of activeGroups) {
     const ordered = [...group].sort((a, b) => a.occurredAt - b.occurredAt);
     const prior = ordered.filter((snapshot) => snapshot.occurredAt <= from).at(-1);
@@ -96,7 +101,7 @@ function summarizeQuota(snapshots: QuotaSnapshot[], from: number) {
     const first = prior ?? inside[0];
     const lastUsed = Math.max(first.usedPercent, ...inside.map((snapshot) => snapshot.usedPercent));
     consumed += Math.max(0, lastUsed - first.usedPercent);
-    normalized.push({ first, lastUsed });
+    normalized.push({ first, lastUsed, resetsAt: ordered.at(-1)!.resetsAt });
   }
 
   const first = normalized[0];
@@ -105,10 +110,17 @@ function summarizeQuota(snapshots: QuotaSnapshot[], from: number) {
     startRemainingPercent: 100 - first.first.usedPercent,
     endRemainingPercent: 100 - last.lastUsed,
     percentagePointsConsumed: consumed,
-    resetsAt: last.first.resetsAt,
-    resets: normalized.slice(1).map((entry) => ({ at: entry.first.occurredAt, resetsAt: entry.first.resetsAt })),
+    resetsAt: last.resetsAt,
+    resets: normalized.slice(1).map((entry) => ({ at: entry.first.occurredAt, resetsAt: entry.resetsAt })),
     observations: snapshots.length
   };
+}
+
+function primaryQuotaSnapshots(snapshots: QuotaSnapshot[], pool: PoolFilter): QuotaSnapshot[] {
+  return snapshots.filter((snapshot) => {
+    if (snapshot.limitId !== "codex") return false;
+    return pool === "all" ? snapshot.pool === "standard" : true;
+  });
 }
 
 export function getSummary(database: UsageDatabase, from: number, to: number, pool: PoolFilter) {
@@ -126,7 +138,7 @@ export function getSummary(database: UsageDatabase, from: number, to: number, po
     addEvent(model, event);
   }
 
-  const quotaSnapshots = database.listQuotaSnapshots(to, pool);
+  const quotaSnapshots = primaryQuotaSnapshots(database.listQuotaSnapshots(to, pool), pool);
   return {
     from,
     to,
@@ -164,7 +176,7 @@ export function getTimeseries(
     return { at, tokens, costNanoUsd };
   });
 
-  const quota = database.listQuotaSnapshots(to, pool)
+  const quota = primaryQuotaSnapshots(database.listQuotaSnapshots(to, pool), pool)
     .filter((snapshot) => snapshot.occurredAt >= from)
     .map((snapshot) => ({
       at: snapshot.occurredAt,

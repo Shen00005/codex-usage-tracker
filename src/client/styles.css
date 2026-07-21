@@ -50,7 +50,8 @@ h2 { font-size: 20px; }
 .quota-meta span:last-child { color: var(--amber); }
 
 .range-console { display: grid; grid-template-columns: minmax(380px, 1fr) auto 18px auto auto auto; gap: 10px; align-items: end; padding: 18px 0; border-bottom: 1px solid var(--line); }
-.preset-bank { display: flex; align-items: center; gap: 3px; }
+.preset-bank { display: flex; align-items: center; gap: 3px; scrollbar-width: none; }
+.preset-bank::-webkit-scrollbar { display: none; }
 .preset-bank button, .refresh-button { min-height: 38px; border: 1px solid var(--line); background: #101722; color: #a8b4c4; cursor: pointer; }
 .preset-bank button { padding: 0 12px; }
 .preset-bank button:hover, .preset-bank button.is-active { border-color: #4b6474; color: var(--paper); background: #192634; }

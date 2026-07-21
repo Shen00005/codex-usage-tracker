@@ -85,14 +85,38 @@ describe("getSummary", () => {
 
   it("segments resets instead of subtracting across windows", () => {
     const store = db();
-    store.insertQuotaSnapshot(quota("a", 900, 4, 2_000));
-    store.insertQuotaSnapshot(quota("b", 1_100, 5, 2_000));
-    store.insertQuotaSnapshot(quota("c", 1_500, 0.2, 9_000));
-    store.insertQuotaSnapshot(quota("d", 1_800, 0.6, 9_000));
+    store.insertQuotaSnapshot(quota("a", 900, 4, 2_000_000));
+    store.insertQuotaSnapshot(quota("b", 1_100, 5, 2_000_000));
+    store.insertQuotaSnapshot(quota("c", 1_500, 0.2, 9_000_000));
+    store.insertQuotaSnapshot(quota("d", 1_800, 0.6, 9_000_000));
 
     const result = getSummary(store, 1_000, 2_000, "standard");
     expect(result.quota.percentagePointsConsumed).toBeCloseTo(1.4);
     expect(result.quota.resets).toHaveLength(1);
+  });
+
+  it("does not merge secondary limit IDs into the primary weekly meter", () => {
+    const store = db();
+    store.insertQuotaSnapshot(quota("primary", 1_100, 1, 8_000));
+    store.insertQuotaSnapshot({
+      ...quota("secondary", 1_100, 0, 7_000),
+      limitId: "codex_bengalfox"
+    });
+
+    const result = getSummary(store, 1_000, 2_000, "standard");
+    expect(result.quota.endRemainingPercent).toBe(99);
+    expect(result.quota.resets).toHaveLength(0);
+  });
+
+  it("treats small reset timestamp drift as one quota window", () => {
+    const store = db();
+    store.insertQuotaSnapshot(quota("jitter-a", 1_100, 1, 8_000_000));
+    store.insertQuotaSnapshot(quota("jitter-b", 1_200, 1.5, 8_001_000));
+
+    const result = getSummary(store, 1_000, 2_000, "standard");
+    expect(result.quota.percentagePointsConsumed).toBeCloseTo(0.5);
+    expect(result.quota.endRemainingPercent).toBe(98.5);
+    expect(result.quota.resets).toHaveLength(0);
   });
 });
 
