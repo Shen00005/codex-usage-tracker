@@ -122,6 +122,13 @@ describe("App", () => {
     expect(screen.getByText("Drag across the chart to set From / To")).toBeInTheDocument();
   });
 
+  it("offers aggregate graph export and snapshot loading", async () => {
+    render(<App apiClient={api()} now={() => now} />);
+    expect(await screen.findByRole("button", { name: "Export" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Load" })).toBeEnabled();
+    expect(screen.getByLabelText("Load graph snapshot")).toHaveAttribute("accept", ".json,application/json");
+  });
+
   it("shows a direct error when refresh fails", async () => {
     const client = api();
     vi.mocked(client.getSummary).mockRejectedValue(new Error("collector offline"));

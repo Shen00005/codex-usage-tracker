@@ -12,6 +12,7 @@ It follows Codex's local token-count events every two seconds, stores only numer
 - Sol, Terra, and Luna as the standard pool, with Spark kept separate
 - Rolling presets and exact custom start/end times
 - Optional click-and-drag start/end selection directly on the usage graph
+- JSON graph snapshot export and load for sharing or reopening a frozen aggregate view
 
 ## Start
 
@@ -51,6 +52,8 @@ Codex event timestamps—not polling time—are stored as the usage time. Pollin
 API-equivalent cost is not an actual charge to the ChatGPT subscription. It is what the recorded token traffic would cost at the configured API rates.
 
 Speed does not alter the API-equivalent dollar calculation. The separate credit-weighted total counts `priority` tokens at 2.5× and `default` tokens at 1×; `unknown` historical events are conservatively counted at 1×.
+
+Graph exports contain only the selected range's aggregate summary and chart series. Loading an export freezes that snapshot in the dashboard until **Return live** is selected; it does not write imported data into the tracker database.
 
 ## Privacy
 

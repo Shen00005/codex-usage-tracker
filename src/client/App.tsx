@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties } from "react";
 import {
   Area,
   CartesianGrid,
@@ -21,6 +21,33 @@ interface AppProps {
 
 interface ChartPointerState {
   activeLabel?: string | number;
+}
+
+interface GraphSnapshot {
+  schema: "codex-usage-graph/v1";
+  exportedAt: number;
+  summary: SummaryResponse;
+  series: TimeseriesResponse;
+}
+
+function parseGraphSnapshot(value: unknown): GraphSnapshot {
+  if (!value || typeof value !== "object") throw new Error("Snapshot must be a JSON object.");
+  const snapshot = value as Partial<GraphSnapshot>;
+  const summary = snapshot.summary as Partial<SummaryResponse> | undefined;
+  const series = snapshot.series as Partial<TimeseriesResponse> | undefined;
+  if (snapshot.schema !== "codex-usage-graph/v1") throw new Error("Unsupported graph snapshot format.");
+  if (!summary || !series || !summary.totals || !summary.quota || !Array.isArray(summary.models) || !Array.isArray(summary.serviceTiers)) {
+    throw new Error("Snapshot summary is incomplete.");
+  }
+  if (!Array.isArray(series.usage) || !Array.isArray(series.quota)) throw new Error("Snapshot graph data is incomplete.");
+  if (![summary.from, summary.to, series.from, series.to, series.bucketMs].every((item) => typeof item === "number" && Number.isFinite(item))) {
+    throw new Error("Snapshot contains invalid timestamps.");
+  }
+  if (summary.from! >= summary.to! || series.from! >= series.to!) throw new Error("Snapshot time range is invalid.");
+  if (!(["standard", "spark", "all"] as string[]).includes(String(summary.pool)) || summary.pool !== series.pool) {
+    throw new Error("Snapshot usage pool is invalid.");
+  }
+  return snapshot as GraphSnapshot;
 }
 
 const PRESETS: Array<{ value: RangePreset; label: string }> = [
@@ -82,6 +109,8 @@ export function App({ apiClient = httpUsageApi, now = Date.now }: AppProps) {
   const [displayRange, setDisplayRange] = useState(() => resolveRange(selection, now()));
   const [graphSelectEnabled, setGraphSelectEnabled] = useState(false);
   const [graphDrag, setGraphDrag] = useState<{ start: number; end: number } | null>(null);
+  const [loadedGraph, setLoadedGraph] = useState<{ snapshot: GraphSnapshot; name: string } | null>(null);
+  const loadInput = useRef<HTMLInputElement>(null);
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
     const range = resolveRange(selection, now());
@@ -121,20 +150,26 @@ export function App({ apiClient = httpUsageApi, now = Date.now }: AppProps) {
     };
   }, [refresh, refreshMs]);
 
-  const plotted = useMemo(() => chartData(series), [series]);
-  const quota = summary?.quota;
+  const shownSummary = loadedGraph?.snapshot.summary ?? summary;
+  const shownSeries = loadedGraph?.snapshot.series ?? series;
+  const shownRange = loadedGraph
+    ? { from: loadedGraph.snapshot.summary.from, to: loadedGraph.snapshot.summary.to }
+    : displayRange;
+  const plotted = useMemo(() => chartData(shownSeries), [shownSeries]);
+  const quota = shownSummary?.quota;
   const remaining = quota?.endRemainingPercent ?? null;
   const quotaStyle = { "--quota-position": `${remaining ?? 0}%` } as CSSProperties;
-  const speed = summary?.serviceTiers.find((tier) => tier.serviceTier === "priority");
-  const unknownSpeed = summary?.serviceTiers.find((tier) => tier.serviceTier === "unknown");
+  const speed = shownSummary?.serviceTiers.find((tier) => tier.serviceTier === "priority");
+  const unknownSpeed = shownSummary?.serviceTiers.find((tier) => tier.serviceTier === "unknown");
 
   const setCustomBoundary = (side: "from" | "to", value: string) => {
     const timestamp = localInputToUtc(value);
     if (!Number.isFinite(timestamp)) return;
+    setLoadedGraph(null);
     setSelection({
       mode: "custom",
-      from: side === "from" ? timestamp : displayRange.from,
-      to: side === "to" ? timestamp : displayRange.to
+      from: side === "from" ? timestamp : shownRange.from,
+      to: side === "to" ? timestamp : shownRange.to
     });
   };
 
@@ -161,7 +196,40 @@ export function App({ apiClient = httpUsageApi, now = Date.now }: AppProps) {
     const to = Math.max(graphDrag.start, graphDrag.end);
     setGraphDrag(null);
     if (to <= from) return;
+    setLoadedGraph(null);
     setSelection({ mode: "custom", from, to });
+  };
+
+  const exportGraph = () => {
+    if (!shownSummary || !shownSeries) return;
+    const snapshot: GraphSnapshot = {
+      schema: "codex-usage-graph/v1",
+      exportedAt: Date.now(),
+      summary: shownSummary,
+      series: shownSeries
+    };
+    const blob = new Blob([JSON.stringify(snapshot, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `codex-usage-graph-${new Date(snapshot.exportedAt).toISOString().replaceAll(":", "-")}.json`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const loadGraph = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    try {
+      const snapshot = parseGraphSnapshot(JSON.parse(await file.text()) as unknown);
+      setLoadedGraph({ snapshot, name: file.name });
+      setGraphDrag(null);
+      setGraphSelectEnabled(false);
+      setError(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not load graph snapshot.");
+    }
   };
 
   return (
@@ -203,14 +271,20 @@ export function App({ apiClient = httpUsageApi, now = Date.now }: AppProps) {
               type="button"
               key={preset.value}
               className={selection.mode === "preset" && selection.preset === preset.value ? "is-active" : ""}
-              onClick={() => setSelection({ mode: "preset", preset: preset.value })}
+              onClick={() => {
+                setLoadedGraph(null);
+                setSelection({ mode: "preset", preset: preset.value });
+              }}
             >{preset.label}</button>
           ))}
         </div>
-        <label>From<input type="datetime-local" value={utcToLocalInput(displayRange.from)} onChange={(event) => setCustomBoundary("from", event.target.value)} /></label>
+        <label>From<input type="datetime-local" value={utcToLocalInput(shownRange.from)} onChange={(event) => setCustomBoundary("from", event.target.value)} /></label>
         <span className="range-arrow" aria-hidden="true">→</span>
-        <label>To<input type="datetime-local" value={utcToLocalInput(displayRange.to)} onChange={(event) => setCustomBoundary("to", event.target.value)} /></label>
-        <label>Usage pool<select aria-label="Usage pool" value={pool} onChange={(event) => setPool(event.target.value as PoolFilter)}>
+        <label>To<input type="datetime-local" value={utcToLocalInput(shownRange.to)} onChange={(event) => setCustomBoundary("to", event.target.value)} /></label>
+        <label>Usage pool<select aria-label="Usage pool" value={loadedGraph?.snapshot.summary.pool ?? pool} onChange={(event) => {
+          setLoadedGraph(null);
+          setPool(event.target.value as PoolFilter);
+        }}>
           <option value="standard">Sol / Terra / Luna</option>
           <option value="spark">Spark</option>
           <option value="all">All pools</option>
@@ -224,17 +298,24 @@ export function App({ apiClient = httpUsageApi, now = Date.now }: AppProps) {
             setGraphDrag(null);
           }}
         >{graphSelectEnabled ? "Graph select: on" : "Select on graph"}</button>
-        <button type="button" className="refresh-button" onClick={() => void refresh()} disabled={refreshing}>
-          {refreshing ? "Reading…" : "Refresh now"}
+        <div className="snapshot-actions">
+          <button type="button" onClick={exportGraph} disabled={!shownSummary || !shownSeries}>Export</button>
+          <button type="button" onClick={() => loadInput.current?.click()}>Load</button>
+          <input ref={loadInput} type="file" accept=".json,application/json" aria-label="Load graph snapshot" onChange={(event) => void loadGraph(event)} />
+        </div>
+        <button type="button" className="refresh-button" onClick={() => loadedGraph ? setLoadedGraph(null) : void refresh()} disabled={refreshing && !loadedGraph}>
+          {loadedGraph ? "Return live" : refreshing ? "Reading…" : "Refresh now"}
         </button>
       </section>
+
+      {loadedGraph && <div className="snapshot-strip"><strong>Loaded snapshot</strong><span>{loadedGraph.name}</span><span>{dateTime.format(loadedGraph.snapshot.exportedAt)}</span></div>}
 
       {error && <div className="error-strip" role="alert"><strong>Collector error</strong><span>{error}</span></div>}
 
       <section className="metric-strip" aria-label="Range totals">
-        <article><span>Credit-weighted</span><strong>{summary ? number.format(summary.totals.creditWeightedTokens) : "—"}</strong><small>{summary ? `${number.format(speed?.totalTokens ?? 0)} Speed tokens × ${SPEED_CREDIT_MULTIPLIER}${unknownSpeed?.requestCount ? ` · ${number.format(unknownSpeed.requestCount)} unknown at ×1` : ""}` : "Detecting service tier"}</small></article>
-        <article><span>API equivalent</span><strong>{summary ? formatUsd(summary.totals.costNanoUsd) : "—"}</strong><small>{summary?.totals.unpricedRequests ? `${summary.totals.unpricedRequests} unpriced requests` : "Exact priced requests"}</small></article>
-        <article><span>Total tokens</span><strong>{summary ? number.format(summary.totals.totalTokens) : "—"}</strong><small>{summary ? `${number.format(summary.totals.requestCount)} responses` : "No events yet"}</small></article>
+        <article><span>Credit-weighted</span><strong>{shownSummary ? number.format(shownSummary.totals.creditWeightedTokens) : "—"}</strong><small>{shownSummary ? `${number.format(speed?.totalTokens ?? 0)} Speed tokens × ${SPEED_CREDIT_MULTIPLIER}${unknownSpeed?.requestCount ? ` · ${number.format(unknownSpeed.requestCount)} unknown at ×1` : ""}` : "Detecting service tier"}</small></article>
+        <article><span>API equivalent</span><strong>{shownSummary ? formatUsd(shownSummary.totals.costNanoUsd) : "—"}</strong><small>{shownSummary?.totals.unpricedRequests ? `${shownSummary.totals.unpricedRequests} unpriced requests` : "Exact priced requests"}</small></article>
+        <article><span>Total tokens</span><strong>{shownSummary ? number.format(shownSummary.totals.totalTokens) : "—"}</strong><small>{shownSummary ? `${number.format(shownSummary.totals.requestCount)} responses` : "No events yet"}</small></article>
         <article><span>Remaining</span><strong>{remaining === null ? "—" : `${remaining.toFixed(1)}%`}</strong><small>Codex-reported precision</small></article>
         <article><span>Consumed</span><strong>{quota?.percentagePointsConsumed === null || quota?.percentagePointsConsumed === undefined ? "—" : `${quota.percentagePointsConsumed.toFixed(1)} pp`}</strong><small>{quota?.resets.length ? `${quota.resets.length} reset boundary` : "Reset-safe delta"}</small></article>
       </section>
@@ -243,7 +324,7 @@ export function App({ apiClient = httpUsageApi, now = Date.now }: AppProps) {
         <article className="chart-panel">
           <div className="panel-heading">
             <div><p className="eyebrow">Time-aligned record</p><h2>Usage trace</h2></div>
-            <span>{dateTime.format(displayRange.from)} — {dateTime.format(displayRange.to)}</span>
+            <span>{dateTime.format(shownRange.from)} — {dateTime.format(shownRange.to)}</span>
           </div>
           <div className="chart-frame">
             {plotted.length ? (
@@ -258,7 +339,7 @@ export function App({ apiClient = httpUsageApi, now = Date.now }: AppProps) {
                   className={graphSelectEnabled ? "graph-select-active" : undefined}
                 >
                   <CartesianGrid stroke="#273044" strokeDasharray="2 5" vertical={false} />
-                  <XAxis dataKey="at" type="number" domain={[displayRange.from, displayRange.to]} tickFormatter={(value) => new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} stroke="#748198" tick={{ fontSize: 10 }} />
+                  <XAxis dataKey="at" type="number" domain={[shownRange.from, shownRange.to]} tickFormatter={(value) => new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} stroke="#748198" tick={{ fontSize: 10 }} />
                   <YAxis yAxisId="tokens" tickFormatter={(value) => `${(value / 1_000_000).toFixed(1)}M`} stroke="#748198" tick={{ fontSize: 10 }} />
                   <YAxis yAxisId="quota" orientation="right" domain={[0, 100]} stroke="#f5a95b" tick={{ fontSize: 10 }} />
                   <Tooltip contentStyle={{ background: "#111827", border: "1px solid #344057", borderRadius: 2 }} labelFormatter={(value) => dateTime.format(Number(value))} />
@@ -273,12 +354,12 @@ export function App({ apiClient = httpUsageApi, now = Date.now }: AppProps) {
         </article>
 
         <article className="ledger-panel">
-          <div className="panel-heading"><div><p className="eyebrow">Per-model accounting</p><h2>Model ledger</h2></div><span>{summary?.models.length ?? 0} active</span></div>
+          <div className="panel-heading"><div><p className="eyebrow">Per-model accounting</p><h2>Model ledger</h2></div><span>{shownSummary?.models.length ?? 0} active</span></div>
           <div className="ledger-scroll">
             <table>
               <thead><tr><th>Model</th><th>Mode</th><th>Input</th><th>Cached</th><th>Writes</th><th>Output</th><th>API eq.</th></tr></thead>
               <tbody>
-                {summary?.models.map((model) => (
+                {shownSummary?.models.map((model) => (
                   <tr key={`${model.pool}:${model.model}:${model.serviceTier}`}>
                     <td><strong>{model.model}</strong><span className={`pool-tag pool-tag--${model.pool}`}>{model.pool}</span></td>
                     <td><span className={`tier-tag tier-tag--${model.serviceTier}`}>{model.serviceTier === "priority" ? "Speed" : model.serviceTier}</span></td>
@@ -289,7 +370,7 @@ export function App({ apiClient = httpUsageApi, now = Date.now }: AppProps) {
                     <td>{model.unpricedRequests === model.requestCount ? "Unpriced" : formatUsd(model.costNanoUsd)}</td>
                   </tr>
                 ))}
-                {!summary?.models.length && <tr><td colSpan={7} className="empty-cell">No model activity in this range.</td></tr>}
+                {!shownSummary?.models.length && <tr><td colSpan={7} className="empty-cell">No model activity in this range.</td></tr>}
               </tbody>
             </table>
           </div>
