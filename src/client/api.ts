@@ -1,5 +1,5 @@
 import type { CollectorStatus, UsagePool } from "../shared/domain.js";
-import type { ModelSummary, PoolFilter, UsageTotals } from "../server/queries.js";
+import type { ModelSummary, PoolFilter, ServiceTierSummary, UsageTotals } from "../server/queries.js";
 
 export interface HealthResponse {
   collector: CollectorStatus;
@@ -20,6 +20,7 @@ export interface SummaryResponse {
   pool: PoolFilter;
   totals: UsageTotals;
   models: ModelSummary[];
+  serviceTiers: ServiceTierSummary[];
   quota: {
     startRemainingPercent: number | null;
     endRemainingPercent: number | null;

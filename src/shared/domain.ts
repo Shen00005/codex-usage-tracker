@@ -1,4 +1,5 @@
 export type UsagePool = "standard" | "spark" | "other";
+export type ServiceTier = "default" | "priority" | "unknown";
 
 export interface TokenUsage {
   inputTokens: number;
@@ -14,6 +15,7 @@ export interface UsageEvent extends TokenUsage {
   sessionId: string | null;
   model: string;
   sourceSurface: string | null;
+  serviceTier: ServiceTier;
   contextWindow: number | null;
   longContext: boolean;
   pool: UsagePool;
@@ -40,6 +42,7 @@ export interface FileCursor {
   sessionId: string | null;
   model: string | null;
   sourceSurface: string | null;
+  serviceTier: ServiceTier;
   updatedAt: number;
 }
 

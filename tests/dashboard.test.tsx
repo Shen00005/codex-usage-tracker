@@ -26,6 +26,7 @@ function api(): UsageApi {
         outputTokens: 71_085,
         reasoningOutputTokens: 24_919,
         totalTokens: 7_147_085,
+        creditWeightedTokens: 17_588_307.5,
         costNanoUsd: 7_134_208_200,
         requestCount: 124,
         longContextRequests: 0,
@@ -33,15 +34,29 @@ function api(): UsageApi {
       },
       models: [
         {
-          model: "gpt-5.6-sol", pool: "standard", inputTokens: 6_890_547, cachedInputTokens: 6_566_912,
+          model: "gpt-5.6-sol", pool: "standard", serviceTier: "priority", inputTokens: 6_890_547, cachedInputTokens: 6_566_912,
           cacheWriteInputTokens: 0, uncachedInputTokens: 323_635, outputTokens: 70_268,
-          reasoningOutputTokens: 24_441, totalTokens: 6_960_815, costNanoUsd: 7_009_671_000,
+          reasoningOutputTokens: 24_441, totalTokens: 6_960_815, creditWeightedTokens: 17_402_037.5, costNanoUsd: 7_009_671_000,
           requestCount: 119, longContextRequests: 0, unpricedRequests: 0
         },
         {
-          model: "gpt-5.6-luna", pool: "standard", inputTokens: 185_453, cachedInputTokens: 73_472,
+          model: "gpt-5.6-luna", pool: "standard", serviceTier: "default", inputTokens: 185_453, cachedInputTokens: 73_472,
           cacheWriteInputTokens: 0, uncachedInputTokens: 111_981, outputTokens: 817,
-          reasoningOutputTokens: 478, totalTokens: 186_270, costNanoUsd: 124_537_200,
+          reasoningOutputTokens: 478, totalTokens: 186_270, creditWeightedTokens: 186_270, costNanoUsd: 124_537_200,
+          requestCount: 5, longContextRequests: 0, unpricedRequests: 0
+        }
+      ],
+      serviceTiers: [
+        {
+          serviceTier: "priority", inputTokens: 6_890_547, cachedInputTokens: 6_566_912,
+          cacheWriteInputTokens: 0, uncachedInputTokens: 323_635, outputTokens: 70_268,
+          reasoningOutputTokens: 24_441, totalTokens: 6_960_815, creditWeightedTokens: 17_402_037.5, costNanoUsd: 7_009_671_000,
+          requestCount: 119, longContextRequests: 0, unpricedRequests: 0
+        },
+        {
+          serviceTier: "default", inputTokens: 185_453, cachedInputTokens: 73_472,
+          cacheWriteInputTokens: 0, uncachedInputTokens: 111_981, outputTokens: 817,
+          reasoningOutputTokens: 478, totalTokens: 186_270, creditWeightedTokens: 186_270, costNanoUsd: 124_537_200,
           requestCount: 5, longContextRequests: 0, unpricedRequests: 0
         }
       ],
@@ -77,6 +92,8 @@ describe("App", () => {
     render(<App apiClient={api()} now={() => now} />);
     expect(await screen.findByText("$7.13420820")).toBeInTheDocument();
     expect(screen.getByText("7,147,085")).toBeInTheDocument();
+    expect(screen.getByText("17,588,307.5")).toBeInTheDocument();
+    expect(screen.getByText("Speed")).toBeInTheDocument();
     expect(screen.getAllByText("99.0%").length).toBeGreaterThan(0);
     expect(screen.getByText("1.0 pp")).toBeInTheDocument();
     expect(screen.getByText("gpt-5.6-sol")).toBeInTheDocument();
@@ -95,6 +112,14 @@ describe("App", () => {
       "spark",
       expect.anything()
     ));
+  });
+
+  it("toggles graph range selection mode", async () => {
+    render(<App apiClient={api()} now={() => now} />);
+    const toggle = await screen.findByRole("button", { name: "Select on graph" });
+    fireEvent.click(toggle);
+    expect(screen.getByRole("button", { name: "Graph select: on" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("Drag across the chart to set From / To")).toBeInTheDocument();
   });
 
   it("shows a direct error when refresh fails", async () => {

@@ -4,18 +4,23 @@ import {
   CartesianGrid,
   ComposedChart,
   Line,
+  ReferenceArea,
   ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis
 } from "recharts";
-import type { PoolFilter } from "../server/queries.js";
+import { SPEED_CREDIT_MULTIPLIER, type PoolFilter } from "../server/queries.js";
 import { httpUsageApi, type HealthResponse, type SummaryResponse, type TimeseriesResponse, type UsageApi } from "./api.js";
 import { localInputToUtc, resolveRange, utcToLocalInput, type RangePreset, type RangeSelection } from "./range.js";
 
 interface AppProps {
   apiClient?: UsageApi;
   now?: () => number;
+}
+
+interface ChartPointerState {
+  activeLabel?: string | number;
 }
 
 const PRESETS: Array<{ value: RangePreset; label: string }> = [
@@ -42,6 +47,10 @@ function formatLag(lagMs: number | null): string {
 function chartData(series: TimeseriesResponse | null) {
   if (!series) return [];
   const points = new Map<number, { at: number; tokens?: number; cost?: number; remaining?: number }>();
+  for (let at = series.from; at <= series.to; at += series.bucketMs) {
+    points.set(at, { at });
+  }
+  if (!points.has(series.to)) points.set(series.to, { at: series.to });
   for (const point of series.usage) {
     points.set(point.at, { at: point.at, tokens: point.tokens, cost: point.costNanoUsd / 1_000_000_000 });
   }
@@ -71,6 +80,8 @@ export function App({ apiClient = httpUsageApi, now = Date.now }: AppProps) {
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [displayRange, setDisplayRange] = useState(() => resolveRange(selection, now()));
+  const [graphSelectEnabled, setGraphSelectEnabled] = useState(false);
+  const [graphDrag, setGraphDrag] = useState<{ start: number; end: number } | null>(null);
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
     const range = resolveRange(selection, now());
@@ -114,6 +125,8 @@ export function App({ apiClient = httpUsageApi, now = Date.now }: AppProps) {
   const quota = summary?.quota;
   const remaining = quota?.endRemainingPercent ?? null;
   const quotaStyle = { "--quota-position": `${remaining ?? 0}%` } as CSSProperties;
+  const speed = summary?.serviceTiers.find((tier) => tier.serviceTier === "priority");
+  const unknownSpeed = summary?.serviceTiers.find((tier) => tier.serviceTier === "unknown");
 
   const setCustomBoundary = (side: "from" | "to", value: string) => {
     const timestamp = localInputToUtc(value);
@@ -123,6 +136,32 @@ export function App({ apiClient = httpUsageApi, now = Date.now }: AppProps) {
       from: side === "from" ? timestamp : displayRange.from,
       to: side === "to" ? timestamp : displayRange.to
     });
+  };
+
+  const graphTimestamp = (state: ChartPointerState | null): number | null => {
+    const timestamp = Number(state?.activeLabel);
+    return Number.isFinite(timestamp) ? timestamp : null;
+  };
+
+  const beginGraphSelection = (state: ChartPointerState | null) => {
+    if (!graphSelectEnabled) return;
+    const timestamp = graphTimestamp(state);
+    if (timestamp !== null) setGraphDrag({ start: timestamp, end: timestamp });
+  };
+
+  const updateGraphSelection = (state: ChartPointerState | null) => {
+    if (!graphSelectEnabled || !graphDrag) return;
+    const timestamp = graphTimestamp(state);
+    if (timestamp !== null) setGraphDrag((current) => current ? { ...current, end: timestamp } : null);
+  };
+
+  const finishGraphSelection = () => {
+    if (!graphDrag) return;
+    const from = Math.min(graphDrag.start, graphDrag.end);
+    const to = Math.max(graphDrag.start, graphDrag.end);
+    setGraphDrag(null);
+    if (to <= from) return;
+    setSelection({ mode: "custom", from, to });
   };
 
   return (
@@ -176,6 +215,15 @@ export function App({ apiClient = httpUsageApi, now = Date.now }: AppProps) {
           <option value="spark">Spark</option>
           <option value="all">All pools</option>
         </select></label>
+        <button
+          type="button"
+          className={`graph-select-button${graphSelectEnabled ? " is-active" : ""}`}
+          aria-pressed={graphSelectEnabled}
+          onClick={() => {
+            setGraphSelectEnabled((enabled) => !enabled);
+            setGraphDrag(null);
+          }}
+        >{graphSelectEnabled ? "Graph select: on" : "Select on graph"}</button>
         <button type="button" className="refresh-button" onClick={() => void refresh()} disabled={refreshing}>
           {refreshing ? "Reading…" : "Refresh now"}
         </button>
@@ -184,6 +232,7 @@ export function App({ apiClient = httpUsageApi, now = Date.now }: AppProps) {
       {error && <div className="error-strip" role="alert"><strong>Collector error</strong><span>{error}</span></div>}
 
       <section className="metric-strip" aria-label="Range totals">
+        <article><span>Credit-weighted</span><strong>{summary ? number.format(summary.totals.creditWeightedTokens) : "—"}</strong><small>{summary ? `${number.format(speed?.totalTokens ?? 0)} Speed tokens × ${SPEED_CREDIT_MULTIPLIER}${unknownSpeed?.requestCount ? ` · ${number.format(unknownSpeed.requestCount)} unknown at ×1` : ""}` : "Detecting service tier"}</small></article>
         <article><span>API equivalent</span><strong>{summary ? formatUsd(summary.totals.costNanoUsd) : "—"}</strong><small>{summary?.totals.unpricedRequests ? `${summary.totals.unpricedRequests} unpriced requests` : "Exact priced requests"}</small></article>
         <article><span>Total tokens</span><strong>{summary ? number.format(summary.totals.totalTokens) : "—"}</strong><small>{summary ? `${number.format(summary.totals.requestCount)} responses` : "No events yet"}</small></article>
         <article><span>Remaining</span><strong>{remaining === null ? "—" : `${remaining.toFixed(1)}%`}</strong><small>Codex-reported precision</small></article>
@@ -199,7 +248,15 @@ export function App({ apiClient = httpUsageApi, now = Date.now }: AppProps) {
           <div className="chart-frame">
             {plotted.length ? (
               <ResponsiveContainer width="100%" height="100%">
-                <ComposedChart data={plotted} margin={{ top: 12, right: 12, bottom: 4, left: 4 }}>
+                <ComposedChart
+                  data={plotted}
+                  margin={{ top: 12, right: 12, bottom: 4, left: 4 }}
+                  onMouseDown={beginGraphSelection}
+                  onMouseMove={updateGraphSelection}
+                  onMouseUp={finishGraphSelection}
+                  onMouseLeave={finishGraphSelection}
+                  className={graphSelectEnabled ? "graph-select-active" : undefined}
+                >
                   <CartesianGrid stroke="#273044" strokeDasharray="2 5" vertical={false} />
                   <XAxis dataKey="at" type="number" domain={[displayRange.from, displayRange.to]} tickFormatter={(value) => new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} stroke="#748198" tick={{ fontSize: 10 }} />
                   <YAxis yAxisId="tokens" tickFormatter={(value) => `${(value / 1_000_000).toFixed(1)}M`} stroke="#748198" tick={{ fontSize: 10 }} />
@@ -207,22 +264,24 @@ export function App({ apiClient = httpUsageApi, now = Date.now }: AppProps) {
                   <Tooltip contentStyle={{ background: "#111827", border: "1px solid #344057", borderRadius: 2 }} labelFormatter={(value) => dateTime.format(Number(value))} />
                   <Area yAxisId="tokens" type="stepAfter" dataKey="tokens" stroke="#55d6e8" fill="#55d6e822" strokeWidth={2} isAnimationActive={false} />
                   <Line yAxisId="quota" type="stepAfter" dataKey="remaining" stroke="#f5a95b" dot={false} connectNulls strokeWidth={1.5} isAnimationActive={false} />
+                  {graphDrag && <ReferenceArea yAxisId="tokens" x1={graphDrag.start} x2={graphDrag.end} fill="#55d6e8" fillOpacity={0.16} stroke="#55d6e8" strokeOpacity={0.7} />}
                 </ComposedChart>
               </ResponsiveContainer>
             ) : <div className="empty-trace"><span>∿</span><p>No token events in this range.</p></div>}
           </div>
-          <div className="chart-legend"><span className="legend-cyan">Cumulative tokens</span><span className="legend-amber">Weekly remaining</span></div>
+          <div className="chart-legend"><span className="legend-cyan">Cumulative tokens</span><span className="legend-amber">Weekly remaining</span>{graphSelectEnabled && <span className="graph-select-help">Drag across the chart to set From / To</span>}</div>
         </article>
 
         <article className="ledger-panel">
           <div className="panel-heading"><div><p className="eyebrow">Per-model accounting</p><h2>Model ledger</h2></div><span>{summary?.models.length ?? 0} active</span></div>
           <div className="ledger-scroll">
             <table>
-              <thead><tr><th>Model</th><th>Input</th><th>Cached</th><th>Writes</th><th>Output</th><th>API eq.</th></tr></thead>
+              <thead><tr><th>Model</th><th>Mode</th><th>Input</th><th>Cached</th><th>Writes</th><th>Output</th><th>API eq.</th></tr></thead>
               <tbody>
                 {summary?.models.map((model) => (
-                  <tr key={`${model.pool}:${model.model}`}>
+                  <tr key={`${model.pool}:${model.model}:${model.serviceTier}`}>
                     <td><strong>{model.model}</strong><span className={`pool-tag pool-tag--${model.pool}`}>{model.pool}</span></td>
+                    <td><span className={`tier-tag tier-tag--${model.serviceTier}`}>{model.serviceTier === "priority" ? "Speed" : model.serviceTier}</span></td>
                     <td>{number.format(model.inputTokens)}</td>
                     <td>{number.format(model.cachedInputTokens)}</td>
                     <td>{number.format(model.cacheWriteInputTokens)}</td>
@@ -230,7 +289,7 @@ export function App({ apiClient = httpUsageApi, now = Date.now }: AppProps) {
                     <td>{model.unpricedRequests === model.requestCount ? "Unpriced" : formatUsd(model.costNanoUsd)}</td>
                   </tr>
                 ))}
-                {!summary?.models.length && <tr><td colSpan={6} className="empty-cell">No model activity in this range.</td></tr>}
+                {!summary?.models.length && <tr><td colSpan={7} className="empty-cell">No model activity in this range.</td></tr>}
               </tbody>
             </table>
           </div>

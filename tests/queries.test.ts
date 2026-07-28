@@ -19,6 +19,7 @@ function event(key: string, at: number, model = "gpt-5.6-sol", pool: UsageEvent[
     sessionId: "s",
     model,
     sourceSurface: "vscode",
+    serviceTier: "default",
     inputTokens: 100,
     cachedInputTokens: 60,
     cacheWriteInputTokens: 10,
@@ -68,6 +69,20 @@ describe("getSummary", () => {
 
     expect(getSummary(store, 1_000, 2_000, "standard").totals.requestCount).toBe(1);
     expect(getSummary(store, 1_000, 2_000, "all").totals.requestCount).toBe(2);
+  });
+
+  it("separates Speed and default service-tier totals", () => {
+    const store = db();
+    store.insertUsageEvent({ ...event("speed", 1_100), serviceTier: "priority" });
+    store.insertUsageEvent({ ...event("default", 1_200), serviceTier: "default" });
+
+    const result = getSummary(store, 1_000, 2_000, "standard");
+    expect(result.serviceTiers).toMatchObject([
+      { serviceTier: "priority", requestCount: 1, totalTokens: 120, creditWeightedTokens: 300 },
+      { serviceTier: "default", requestCount: 1, totalTokens: 120, creditWeightedTokens: 120 }
+    ]);
+    expect(result.totals.creditWeightedTokens).toBe(420);
+    expect(result.models).toHaveLength(2);
   });
 
   it("never moves quota backward when parallel observations are stale", () => {

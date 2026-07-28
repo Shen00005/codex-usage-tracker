@@ -17,6 +17,7 @@ function usageEvent(overrides: Partial<UsageEvent> = {}): UsageEvent {
     sessionId: "session-1",
     model: "gpt-5.6-sol",
     sourceSurface: "Codex Desktop",
+    serviceTier: "default",
     inputTokens: 100,
     cachedInputTokens: 40,
     cacheWriteInputTokens: 10,
@@ -70,6 +71,7 @@ describe("UsageDatabase", () => {
       sessionId: "s1",
       model: "gpt-5.6-luna",
       sourceSurface: "vscode",
+      serviceTier: "priority",
       updatedAt: 5_000
     });
 
@@ -79,6 +81,7 @@ describe("UsageDatabase", () => {
       sessionId: "s1",
       model: "gpt-5.6-luna",
       sourceSurface: "vscode",
+      serviceTier: "priority",
       updatedAt: 5_000
     });
   });

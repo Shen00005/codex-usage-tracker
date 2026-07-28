@@ -27,6 +27,7 @@ function event(key: string, at: number, pool: UsageEvent["pool"] = "standard"): 
     sessionId: "s",
     model: spark ? "gpt-5.3-codex-spark" : "gpt-5.6-sol",
     sourceSurface: "vscode",
+    serviceTier: "default",
     inputTokens: 100,
     cachedInputTokens: 60,
     cacheWriteInputTokens: 0,

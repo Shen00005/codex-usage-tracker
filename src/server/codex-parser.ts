@@ -1,10 +1,11 @@
-import type { QuotaSnapshot, UsageEvent } from "../shared/domain.js";
+import type { QuotaSnapshot, ServiceTier, UsageEvent } from "../shared/domain.js";
 import { poolForModel, priceUsage } from "../shared/pricing.js";
 
 export interface ParserState {
   sessionId: string | null;
   model: string | null;
   sourceSurface: string | null;
+  serviceTier: ServiceTier;
 }
 
 export interface SourcePosition {
@@ -19,7 +20,7 @@ export interface ParseResult {
 }
 
 export function initialParserState(): ParserState {
-  return { sessionId: null, model: null, sourceSurface: null };
+  return { sessionId: null, model: null, sourceSurface: null, serviceTier: "unknown" };
 }
 
 function eventKey(source: SourcePosition, suffix = "usage"): string {
@@ -52,7 +53,8 @@ export function parseCodexLine(line: string, state: ParserState, source: SourceP
       state: {
         sessionId: stringOrNull(payload.id) ?? stringOrNull(payload.session_id) ?? state.sessionId,
         model: state.model,
-        sourceSurface: stringOrNull(payload.originator) ?? stringOrNull(payload.source) ?? state.sourceSurface
+        sourceSurface: stringOrNull(payload.originator) ?? stringOrNull(payload.source) ?? state.sourceSurface,
+        serviceTier: state.serviceTier
       },
       usageEvent: null,
       quotaSnapshot: null
@@ -62,6 +64,17 @@ export function parseCodexLine(line: string, state: ParserState, source: SourceP
   if (type === "turn_context") {
     return {
       state: { ...state, model: stringOrNull(payload.model) ?? state.model },
+      usageEvent: null,
+      quotaSnapshot: null
+    };
+  }
+
+  if (type === "event_msg" && payload.type === "thread_settings_applied") {
+    const settings = payload.thread_settings as Record<string, unknown> | undefined;
+    const rawTier = stringOrNull(settings?.service_tier);
+    const serviceTier: ServiceTier = rawTier === "priority" ? "priority" : rawTier === "default" ? "default" : state.serviceTier;
+    return {
+      state: { ...state, serviceTier },
       usageEvent: null,
       quotaSnapshot: null
     };
@@ -95,6 +108,7 @@ export function parseCodexLine(line: string, state: ParserState, source: SourceP
       sessionId: state.sessionId,
       model,
       sourceSurface: state.sourceSurface,
+      serviceTier: state.serviceTier,
       ...tokenUsage,
       contextWindow: info && typeof info.model_context_window === "number" ? info.model_context_window : null,
       longContext: priced.longContext,

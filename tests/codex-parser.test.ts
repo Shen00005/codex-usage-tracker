@@ -50,6 +50,21 @@ describe("parseCodexLine", () => {
     expect(quotas[2]).toMatchObject({ limitId: "codex_spark", pool: "spark" });
   });
 
+  it("tracks Speed mode from applied thread settings", () => {
+    let state = initialParserState();
+    const speed = parseCodexLine(JSON.stringify({
+      type: "event_msg",
+      payload: { type: "thread_settings_applied", thread_settings: { service_tier: "priority" } }
+    }), state, { sourcePath: "x", byteOffset: 1 });
+    state = { ...speed.state, model: "gpt-5.6-sol" };
+    const usage = parseCodexLine(JSON.stringify({
+      timestamp: "2026-07-25T20:00:00.000Z",
+      type: "event_msg",
+      payload: { type: "token_count", info: { last_token_usage: { input_tokens: 100, output_tokens: 10 } } }
+    }), state, { sourcePath: "x", byteOffset: 2 });
+    expect(usage.usageEvent?.serviceTier).toBe("priority");
+  });
+
   it("ignores malformed and irrelevant lines without changing parser state", () => {
     const state = { ...initialParserState(), model: "gpt-5.6-sol" };
     const malformed = parseCodexLine("not-json", state, { sourcePath: "x", byteOffset: 2 });

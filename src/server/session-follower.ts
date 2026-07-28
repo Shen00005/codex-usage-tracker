@@ -122,7 +122,7 @@ export class SessionFollower {
     const size = fileSize(path);
     const offset = stored && stored.byteOffset <= size ? stored.byteOffset : 0;
     const state: ParserState = stored && stored.byteOffset <= size
-      ? { sessionId: stored.sessionId, model: stored.model, sourceSurface: stored.sourceSurface }
+      ? { sessionId: stored.sessionId, model: stored.model, sourceSurface: stored.sourceSurface, serviceTier: stored.serviceTier }
       : initialParserState();
     const result = processFile(path, offset, state, true, this.database);
     this.database.upsertCursor(toCursor(path, result.offset, result.state, this.now()));
@@ -136,6 +136,7 @@ function toCursor(path: string, byteOffset: number, state: ParserState, updatedA
     sessionId: state.sessionId,
     model: state.model,
     sourceSurface: state.sourceSurface,
+    serviceTier: state.serviceTier,
     updatedAt
   };
 }

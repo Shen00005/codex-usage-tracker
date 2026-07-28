@@ -33,6 +33,7 @@ export class UsageDatabase {
         session_id TEXT,
         model TEXT,
         source_surface TEXT,
+        service_tier TEXT NOT NULL DEFAULT 'unknown',
         updated_at INTEGER NOT NULL
       );
 
@@ -42,6 +43,7 @@ export class UsageDatabase {
         session_id TEXT,
         model TEXT NOT NULL,
         source_surface TEXT,
+        service_tier TEXT NOT NULL DEFAULT 'unknown',
         input_tokens INTEGER NOT NULL,
         cached_input_tokens INTEGER NOT NULL,
         cache_write_input_tokens INTEGER NOT NULL,
@@ -72,6 +74,24 @@ export class UsageDatabase {
 
       CREATE INDEX IF NOT EXISTS idx_quota_range ON quota_snapshots(occurred_at, pool);
     `);
+
+    const cursorColumns = this.connection.prepare("PRAGMA table_info(file_cursors)").all() as Array<{ name: string }>;
+    if (!cursorColumns.some((column) => column.name === "service_tier")) {
+      this.connection.exec("ALTER TABLE file_cursors ADD COLUMN service_tier TEXT NOT NULL DEFAULT 'unknown'");
+    }
+    const usageColumns = this.connection.prepare("PRAGMA table_info(usage_events)").all() as Array<{ name: string }>;
+    if (!usageColumns.some((column) => column.name === "service_tier")) {
+      this.connection.exec("ALTER TABLE usage_events ADD COLUMN service_tier TEXT NOT NULL DEFAULT 'unknown'");
+    }
+
+    if (this.getMeta("speed_replay_v1") === null) {
+      this.connection.exec(`
+        UPDATE file_cursors
+        SET byte_offset = 0, session_id = NULL, model = NULL,
+            source_surface = NULL, service_tier = 'unknown'
+      `);
+      this.setMeta("speed_replay_v1", String(Date.now()));
+    }
   }
 
   close(): void {
@@ -94,13 +114,14 @@ export class UsageDatabase {
 
   upsertCursor(cursor: FileCursor): void {
     this.connection.prepare(`
-      INSERT INTO file_cursors(source_path, byte_offset, session_id, model, source_surface, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO file_cursors(source_path, byte_offset, session_id, model, source_surface, service_tier, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(source_path) DO UPDATE SET
         byte_offset = excluded.byte_offset,
         session_id = excluded.session_id,
         model = excluded.model,
         source_surface = excluded.source_surface,
+        service_tier = excluded.service_tier,
         updated_at = excluded.updated_at
     `).run(
       cursor.sourcePath,
@@ -108,6 +129,7 @@ export class UsageDatabase {
       cursor.sessionId,
       cursor.model,
       cursor.sourceSurface,
+      cursor.serviceTier,
       cursor.updatedAt
     );
   }
@@ -123,6 +145,7 @@ export class UsageDatabase {
       sessionId: asNullableString(row.session_id),
       model: asNullableString(row.model),
       sourceSurface: asNullableString(row.source_surface),
+      serviceTier: String(row.service_tier ?? "unknown") as FileCursor["serviceTier"],
       updatedAt: asNumber(row.updated_at)
     };
   }
@@ -135,17 +158,20 @@ export class UsageDatabase {
   insertUsageEvent(event: UsageEvent): boolean {
     const result = this.connection.prepare(`
       INSERT OR IGNORE INTO usage_events(
-        event_key, occurred_at, session_id, model, source_surface,
+        event_key, occurred_at, session_id, model, source_surface, service_tier,
         input_tokens, cached_input_tokens, cache_write_input_tokens,
         output_tokens, reasoning_output_tokens, context_window,
         long_context, pool, cost_nano_usd
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(event_key) DO UPDATE SET service_tier = excluded.service_tier
+      WHERE usage_events.service_tier <> excluded.service_tier
     `).run(
       event.eventKey,
       event.occurredAt,
       event.sessionId,
       event.model,
       event.sourceSurface,
+      event.serviceTier,
       event.inputTokens,
       event.cachedInputTokens,
       event.cacheWriteInputTokens,
@@ -228,6 +254,7 @@ function mapUsageEvent(row: Record<string, DatabaseValue>): UsageEvent {
     sessionId: asNullableString(row.session_id),
     model: String(row.model),
     sourceSurface: asNullableString(row.source_surface),
+    serviceTier: String(row.service_tier ?? "unknown") as UsageEvent["serviceTier"],
     inputTokens: asNumber(row.input_tokens),
     cachedInputTokens: asNumber(row.cached_input_tokens),
     cacheWriteInputTokens: asNumber(row.cache_write_input_tokens),

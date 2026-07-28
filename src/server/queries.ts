@@ -1,8 +1,9 @@
-import type { QuotaSnapshot, UsageEvent, UsagePool } from "../shared/domain.js";
+import type { QuotaSnapshot, ServiceTier, UsageEvent, UsagePool } from "../shared/domain.js";
 import type { UsageDatabase } from "./database.js";
 
 export type PoolFilter = UsagePool | "all";
 const RESET_JITTER_TOLERANCE_MS = 5 * 60 * 1_000;
+export const SPEED_CREDIT_MULTIPLIER = 2.5;
 
 export interface UsageTotals {
   inputTokens: number;
@@ -12,6 +13,7 @@ export interface UsageTotals {
   outputTokens: number;
   reasoningOutputTokens: number;
   totalTokens: number;
+  creditWeightedTokens: number;
   costNanoUsd: number;
   requestCount: number;
   longContextRequests: number;
@@ -21,6 +23,11 @@ export interface UsageTotals {
 export interface ModelSummary extends UsageTotals {
   model: string;
   pool: UsagePool;
+  serviceTier: ServiceTier;
+}
+
+export interface ServiceTierSummary extends UsageTotals {
+  serviceTier: ServiceTier;
 }
 
 function emptyTotals(): UsageTotals {
@@ -32,6 +39,7 @@ function emptyTotals(): UsageTotals {
     outputTokens: 0,
     reasoningOutputTokens: 0,
     totalTokens: 0,
+    creditWeightedTokens: 0,
     costNanoUsd: 0,
     requestCount: 0,
     longContextRequests: 0,
@@ -46,7 +54,9 @@ function addEvent(target: UsageTotals, event: UsageEvent): void {
   target.uncachedInputTokens += Math.max(0, event.inputTokens - event.cachedInputTokens - event.cacheWriteInputTokens);
   target.outputTokens += event.outputTokens;
   target.reasoningOutputTokens += event.reasoningOutputTokens;
-  target.totalTokens += event.inputTokens + event.outputTokens;
+  const totalTokens = event.inputTokens + event.outputTokens;
+  target.totalTokens += totalTokens;
+  target.creditWeightedTokens += totalTokens * (event.serviceTier === "priority" ? SPEED_CREDIT_MULTIPLIER : 1);
   target.costNanoUsd += event.costNanoUsd ?? 0;
   target.requestCount += 1;
   target.longContextRequests += event.longContext ? 1 : 0;
@@ -127,12 +137,19 @@ export function getSummary(database: UsageDatabase, from: number, to: number, po
   const events = database.listUsageEvents(from, to, pool);
   const totals = emptyTotals();
   const byModel = new Map<string, ModelSummary>();
+  const byServiceTier = new Map<ServiceTier, ServiceTierSummary>();
   for (const event of events) {
     addEvent(totals, event);
-    const key = `${event.pool}:${event.model}`;
+    let tier = byServiceTier.get(event.serviceTier);
+    if (!tier) {
+      tier = { serviceTier: event.serviceTier, ...emptyTotals() };
+      byServiceTier.set(event.serviceTier, tier);
+    }
+    addEvent(tier, event);
+    const key = `${event.pool}:${event.model}:${event.serviceTier}`;
     let model = byModel.get(key);
     if (!model) {
-      model = { model: event.model, pool: event.pool, ...emptyTotals() };
+      model = { model: event.model, pool: event.pool, serviceTier: event.serviceTier, ...emptyTotals() };
       byModel.set(key, model);
     }
     addEvent(model, event);
@@ -145,6 +162,10 @@ export function getSummary(database: UsageDatabase, from: number, to: number, po
     pool,
     totals,
     models: [...byModel.values()].sort((a, b) => b.costNanoUsd - a.costNanoUsd || a.model.localeCompare(b.model)),
+    serviceTiers: [...byServiceTier.values()].sort((a, b) => {
+      const order: Record<ServiceTier, number> = { priority: 0, default: 1, unknown: 2 };
+      return order[a.serviceTier] - order[b.serviceTier];
+    }),
     quota: summarizeQuota(quotaSnapshots, from)
   };
 }
